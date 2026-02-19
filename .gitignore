@@ -209,4 +209,7 @@ __marimo__/
 # --- Local Research Artifacts ---
 # Ignore the generated Vector Database
 vectorstore/
+data/
+dataset/
 chroma_db/
+.idea/
