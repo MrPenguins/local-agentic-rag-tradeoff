@@ -41,81 +41,130 @@ print("GPU is warm. Ready to benchmark.")
 class AgentState(TypedDict):
     question: str
     question_id: str
-    plan: str
+    search_queries: list
     context: str
     answer: str
-    feedback: str  # The Critic's complaints
-    loop_count: int  # Safety counter
+    feedback: str
+    loop_count: int
     retrieved_titles: list
 
 
-# --- Node 1: The Adaptive Planner ---
+# --- Node 1: The Adaptive Planner (Query Generator) ---
 def planner_node(state: AgentState):
-    print("--- 🧠 PLANNER: Generating Strategy ---")
+    print(f"\n--- 🧠 PLANNER: Generating Search Queries (Loop {state.get('loop_count', 0)}) ---")
 
-    # Check if this is a retry
     feedback = state.get("feedback", "")
     original_question = state["question"]
 
     if feedback == "Ambiguous review output. Please generate a new plan.":
-        print("   (System Warning: Reviewer failed to parse. Asking Planner to retry.)")
-        template = """You are a Planner Agent.
+        print("   (System Warning: Reviewer failed to provide clear feedback. Generating fallback queries.)")
+        template = """You are a Search Query Generator.
         The previous attempt was technically successful, but the Reviewer failed to parse it.
 
         Original Question: {question}
 
-        Action: Create a ROBUST plan that is slightly different from the last one to ensure clear results.
-        Plan:"""
+        Action: Create 2 NEW search queries slightly different from the last ones.
+        CRITICAL RULE: Output ONLY the queries, separated by a pipe character (|). Do not add bullet points, numbers, or introductory text.
+        
+        Example Input 1 (Comparison): Which film was released first, Inception or The Matrix?
+        Example Output 1: When was the film Inception released? | When was the film The Matrix released?
+
+        Example Input 2 (Bridge): What is the nationality of the director of the movie "Parasite"?
+        Example Output 2: Who is the director of the movie Parasite? | What is the nationality of the director of the movie Parasite?
+
+        Queries:"""
     elif feedback:
-        print(f"   (Refining plan based on feedback: {feedback})")
-        template = """You are a Planner Agent.
+        print(f"   (Refining queries based on feedback: {feedback})")
+        template = """You are a Search Query Generator.
         The previous attempt to answer this question FAILED.
 
         Original Question: {question}
-        Previous Plan Failure Reason: {feedback}
+        Failure Reason: {feedback}
 
-        Create a NEW, BETTER plan to find the correct answer. Focus on the missing information.
-        Plan:"""
+        Action: Create 2 NEW, HIGHLY SPECIFIC search queries to find the missing information mentioned in the feedback.
+        CRITICAL RULE: Output ONLY the queries, separated by a pipe (|). Do not add bullet points, numbers, or introductory text.
+
+        Example Input 1 (Comparison): Which film was released first, Inception or The Matrix?
+        Example Output 1: When was the film Inception released? | When was the film The Matrix released?
+
+        Example Input 2 (Bridge): What is the nationality of the director of the movie "Parasite"?
+        Example Output 2: Who is the director of the movie Parasite? | What is the nationality of the director of the movie Parasite?
+
+        Queries:"""
     else:
-        # First attempt (Standard)
-        template = """You are a Planner Agent.
-        Break down the following complex question into a clear, step-by-step search plan.
+        # First attempt
+        template = """You are a Search Query Generator.
+        Break down the following complex question into 2 simple, atomic search queries.
+
+        CRITICAL RULE: Output ONLY the queries, separated by a pipe character (|). Do not add bullet points, numbers, or introductory text.
+
+        Example Input 1 (Comparison): Which film was released first, Inception or The Matrix?
+        Example Output 1: When was the film Inception released? | When was the film The Matrix released?
+
+        Example Input 2 (Bridge): What is the nationality of the director of the movie "Parasite"?
+        Example Output 2: Who is the director of the movie Parasite? | What is the nationality of the director of the movie Parasite?
 
         Question: {question}
 
-        Plan:"""
+        Queries:"""
 
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | llm | StrOutputParser()
 
-    plan = chain.invoke({"question": original_question, "feedback": feedback})
-    return {"plan": plan}
+    raw_output = chain.invoke({"question": original_question, "feedback": feedback})
+
+    # Parse the output safely
+    queries = [q.strip() for q in raw_output.split("|") if q.strip()]
+    if not queries:
+        queries = [original_question]
+
+    print(f"   (Generated Queries: {queries})")
+    return {"search_queries": queries}
 
 
-# --- Node 2: The Performer (Enhanced RAG) ---
+# --- Node 2: The Performer (Multi-Query RAG with Budget) ---
 def performer_node(state: AgentState):
-    print("--- 🏃 PERFORMER: Executing RAG ---")
+    print("--- 🏃 PERFORMER: Executing Multi-Query RAG ---")
 
-    # 1. Retrieve Context using Metadata Filtering and global vectorstore
+    queries = state["search_queries"]
+
+    # Dynamic K calculation
+    k_per_query = max(1, K // len(queries))
+    print(f"   (Budget constraint: {K} total docs -> {k_per_query} docs per query)")
+
     retriever = vectorstore.as_retriever(
         search_kwargs={
-            "k": K,
+            "k": k_per_query,
             "filter": {"question_id": state["question_id"]}
         }
     )
 
-    docs = retriever.invoke(state["question"])
-    context_text = "\n\n".join(doc.page_content for doc in docs)
+    all_docs = []
+    for query in queries:
+        docs = retriever.invoke(query)
+        all_docs.extend(docs)
 
-    titles = [doc.metadata.get("title", "Unknown Title") for doc in docs]
-    print(f"   (Retrieved Sources: {titles})")
+    # Deduplication
+    unique_docs = []
+    seen_content = set()
+    for doc in all_docs:
+        if doc.page_content not in seen_content:
+            seen_content.add(doc.page_content)
+            unique_docs.append(doc)
 
-    # 2. Generate Answer
-    template = """You are an Expert Performer. 
-    Execute the plan to answer the question using the context.
+    unique_docs = unique_docs[:K]
 
-    Plan: {plan}
-    Context: {context}
+    context_text = "\n\n".join(doc.page_content for doc in unique_docs)
+    titles = [doc.metadata.get("title", "Unknown Title") for doc in unique_docs]
+    print(f"   (Retrieved Unique Sources: {titles})")
+
+    # Strict Synthesis Prompt (No "performing" actions)
+    template = """You are a strict Information Synthesizer.
+    Answer the question based ONLY on the following context:
+    
+    Context:
+    {context}
+
     Question: {question}
 
     Answer:"""
@@ -124,12 +173,10 @@ def performer_node(state: AgentState):
     chain = prompt | llm | StrOutputParser()
 
     answer = chain.invoke({
-        "plan": state.get("plan", ""),
         "context": context_text,
         "question": state["question"]
     })
 
-    # Increment loop count here
     current_loop = state.get("loop_count", 0)
     return {
         "answer": answer,
@@ -172,18 +219,16 @@ def reviewer_node(state: AgentState):
     if clean_review.startswith("STATUS: PASS"):
         print("   ✅ Review: PASSED")
         return {"feedback": None}
-
     elif clean_review.startswith("STATUS: FAIL"):
         print(f"   ❌ Review: FAILED")
         reason = review.replace("STATUS: FAIL", "").strip()
         return {"feedback": reason}
-
     else:
         print(f"   ⚠️ Ambiguous Review. Defaulting to FAIL. (Output: {review[:50]}...)")
         return {"feedback": "Ambiguous review output. Please generate a new plan."}
 
 
-# --- The Router Logic (Conditional Edge) ---
+# --- The Router Logic ---
 def should_continue(state: AgentState):
     feedback = state.get("feedback")
     loop_count = state.get("loop_count", 0)
@@ -227,13 +272,9 @@ correction_agent = build_correction_agent()
 
 # --- Execution Wrapper ---
 def run_correction_agent(question: str, question_id: str):
-    """
-    Executes the self-correction agent workflow and records latency.
-    """
     print(f"\n--- Processing Question: {question} ---")
     start_time = time.time()
 
-    # Run the Graph
     result = correction_agent.invoke({
         "question": question,
         "question_id": question_id,
