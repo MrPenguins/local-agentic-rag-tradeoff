@@ -50,7 +50,9 @@ def run_standard_rag(question, question_id):
     print(f"   (Retrieved Sources: {titles_used})")
     context_text = "\n\n".join(doc.page_content for doc in docs)
 
-    template = """Answer the question based ONLY on the following context:
+    template = """
+    You are a strict Information Synthesizer.
+    Answer the question based ONLY on the following context:
     {context}
 
     Question: {question}
