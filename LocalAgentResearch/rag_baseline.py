@@ -36,17 +36,20 @@ llm.invoke("Hi")
 print("GPU is warm. Ready to benchmark.")
 
 
-def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
-
-
 def run_standard_rag(question, question_id):
-    print(f"--- Question: {question} ---")
+    print(f"\n--- Processing Question: {question} ---")
 
     start_time = time.time()
 
-    retriever = vectorstore.as_retriever(search_kwargs={"k": K, "filter": {
-        "question_id": question_id}})  # Retrieve top 2 chunks
+    retriever = vectorstore.as_retriever(
+        search_kwargs={"k": K, "filter": {"question_id": question_id}}
+    )
+
+    docs = retriever.invoke(question)
+
+    titles_used = [doc.metadata.get("title", "Unknown Title") for doc in docs]
+    print(f"   (Retrieved Sources: {titles_used})")
+    context_text = "\n\n".join(doc.page_content for doc in docs)
 
     template = """Answer the question based ONLY on the following context:
     {context}
@@ -55,23 +58,22 @@ def run_standard_rag(question, question_id):
     """
     prompt = ChatPromptTemplate.from_template(template)
 
-    rag_chain = (
-            {"context": retriever | format_docs, "question": RunnablePassthrough()}
-            | prompt
-            | llm
-            | StrOutputParser()
-    )
+    chain = prompt | llm | StrOutputParser()
 
     print("Thinking...")
-    answer = rag_chain.invoke(question)
+    answer = chain.invoke({
+        "context": context_text,
+        "question": question
+    })
 
     end_time = time.time()
     latency = end_time - start_time
 
     print(f"Answer: {answer}")
+    print(f"📚 Sources Used: {titles_used}")
     print(f"⏱️ Total Latency: {latency:.2f} seconds")
 
-    return answer, latency
+    return answer, latency, titles_used
 
 
 if __name__ == "__main__":

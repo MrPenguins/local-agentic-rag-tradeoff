@@ -46,6 +46,7 @@ class AgentState(TypedDict):
     answer: str
     feedback: str  # The Critic's complaints
     loop_count: int  # Safety counter
+    retrieved_titles: list
 
 
 # --- Node 1: The Adaptive Planner ---
@@ -106,6 +107,9 @@ def performer_node(state: AgentState):
     docs = retriever.invoke(state["question"])
     context_text = "\n\n".join(doc.page_content for doc in docs)
 
+    titles = [doc.metadata.get("title", "Unknown Title") for doc in docs]
+    print(f"   (Retrieved Sources: {titles})")
+
     # 2. Generate Answer
     template = """You are an Expert Performer. 
     Execute the plan to answer the question using the context.
@@ -127,7 +131,12 @@ def performer_node(state: AgentState):
 
     # Increment loop count here
     current_loop = state.get("loop_count", 0)
-    return {"answer": answer, "context": context_text, "loop_count": current_loop + 1}
+    return {
+        "answer": answer,
+        "context": context_text,
+        "loop_count": current_loop + 1,
+        "retrieved_titles": titles
+    }
 
 
 # --- Node 3: The Reviewer ---
@@ -233,12 +242,14 @@ def run_correction_agent(question: str, question_id: str):
 
     end_time = time.time()
     total_latency = end_time - start_time
+    titles_used = result.get('retrieved_titles', [])
 
     print(f"\nFinal Answer: {result['answer']}")
+    print(f"📚 Sources Used: {titles_used}")
     print(f"⏱️ Total Latency: {total_latency:.2f} seconds")
     print(f"🔄 Total Loops: {result.get('loop_count', 1)}")
 
-    return result['answer'], total_latency, result.get('loop_count', 1)
+    return result['answer'], total_latency, titles_used, result.get('loop_count', 1)
 
 
 if __name__ == "__main__":
