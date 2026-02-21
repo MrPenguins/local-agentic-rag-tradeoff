@@ -61,34 +61,37 @@ def planner_node(state: AgentState):
         template = """You are a Search Query Generator.
         The previous attempt was technically successful, but the Reviewer failed to parse it.
 
-        Original Question: {question}
-
-        Action: Create 2 NEW search queries slightly different from the last ones.
         CRITICAL RULE: Output ONLY the queries, separated by a pipe character (|). Do not add bullet points, numbers, or introductory text.
-        
+
         Example Input 1 (Comparison): Which film was released first, Inception or The Matrix?
         Example Output 1: When was the film Inception released? | When was the film The Matrix released?
 
         Example Input 2 (Bridge): What is the nationality of the director of the movie "Parasite"?
         Example Output 2: Who is the director of the movie Parasite? | What is the nationality of the director of the movie Parasite?
 
+        Action: Create 2 NEW search queries slightly different from the last ones.
+
+        Original Question: {question}
         Queries:"""
+
     elif feedback:
         print(f"   (Refining queries based on feedback: {feedback})")
         template = """You are a Search Query Generator.
         The previous attempt to answer this question FAILED.
 
-        Original Question: {question}
-        Failure Reason: {feedback}
-
-        Action: Create 2 NEW, HIGHLY SPECIFIC search queries to find the missing information mentioned in the feedback.
-        CRITICAL RULE: Output ONLY the queries, separated by a pipe (|). Do not add bullet points, numbers, or introductory text.
+        CRITICAL RULE 1: Output ONLY the queries, separated by a pipe character (|). Do not add bullet points, numbers, or introductory text.
+        CRITICAL RULE 2: Your revised queries MUST cover the ENTIRE original question. You must re-ask for the information you need to keep, AND add a new specific query to hunt down the missing information mentioned in the feedback. Do not *only* ask about the missing information, or you will lose the context of the rest of the question!
 
         Example Input 1 (Comparison): Which film was released first, Inception or The Matrix?
         Example Output 1: When was the film Inception released? | When was the film The Matrix released?
 
         Example Input 2 (Bridge): What is the nationality of the director of the movie "Parasite"?
         Example Output 2: Who is the director of the movie Parasite? | What is the nationality of the director of the movie Parasite?
+
+        Action: Create a REVISED set of 2 search queries that solves the failure reason while maintaining the full scope of the question.
+        
+        Original Question: {question}
+        Failure Reason: {feedback}
 
         Queries:"""
     else:
@@ -105,7 +108,6 @@ def planner_node(state: AgentState):
         Example Output 2: Who is the director of the movie Parasite? | What is the nationality of the director of the movie Parasite?
 
         Question: {question}
-
         Queries:"""
 
     prompt = ChatPromptTemplate.from_template(template)
