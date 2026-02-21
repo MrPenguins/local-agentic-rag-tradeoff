@@ -55,7 +55,7 @@ def planner_node(state: AgentState):
 
     CRITICAL RULE: Output ONLY the queries, separated by a pipe character (|). Do not add bullet points, numbers, or introductory text.
 
-Example Input 1 (Comparison): Which film was released first, Inception or The Matrix?
+    Example Input 1 (Comparison): Which film was released first, Inception or The Matrix?
     Example Output 1: When was the film Inception released? | When was the film The Matrix released?
 
     Example Input 2 (Bridge): What is the nationality of the director of the movie "Parasite"?
