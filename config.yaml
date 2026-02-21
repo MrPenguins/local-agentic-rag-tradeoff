@@ -1,0 +1,10 @@
+database:
+  path: "./vectorstore"
+  k_retrieval: 2
+
+models:
+  llm_name: "llama3.1"
+  llm_temperature: 0
+  embedding_name: "all-MiniLM-L6-v2"
+  device: "cuda"
+  max_retries: 3
