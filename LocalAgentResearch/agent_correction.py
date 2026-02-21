@@ -1,5 +1,6 @@
 import time
-from typing import TypedDict, List
+from typing import TypedDict
+import yaml
 from langgraph.graph import StateGraph, START, END
 
 from langchain_ollama import ChatOllama
@@ -9,42 +10,61 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 # --- Configuration ---
-DB_PATH = "./vectorstore"
-MODEL_NAME = "llama3.1"
-MAX_RETRIES = 3  # Safety break to prevent infinite loops
+with open("../config.yaml", "r") as f:
+    config = yaml.safe_load(f)
+
+DB_PATH = config['database']['path']
+K = config['database']['k_retrieval']
+MODEL_NAME = config['models']['llm_name']
+EMBEDDING_NAME = config['models']['embedding_name']
+DEVICE = config['models']['device']
+LLM_TEMPERATURE = config['models']['llm_temperature']
+MAX_RETRIES = config['models']['max_retries']
+
+# --- Global Initialization ---
+print("Initializing models and warming up GPU...")
+embedding_model = HuggingFaceEmbeddings(
+    model_name=EMBEDDING_NAME,
+    model_kwargs={'device': DEVICE}
+)
+vectorstore = Chroma(persist_directory=DB_PATH, embedding_function=embedding_model)
+
+llm = ChatOllama(model=MODEL_NAME, temperature=LLM_TEMPERATURE)
+
+# WARM UP THE LLM
+print("Sending warm-up ping to Ollama...")
+llm.invoke("Hi")
+print("GPU is warm. Ready to benchmark.")
 
 
-# 1. Update the State
-# We add 'feedback' to pass criticism back to the planner
-# We add 'loop_count' to track how many times we've tried
+# --- 1. Define the State ---
 class AgentState(TypedDict):
     question: str
+    question_id: str
     plan: str
     context: str
     answer: str
-    feedback: str  # <--- NEW: The Critic's complaints
-    loop_count: int  # <--- NEW: Safety counter
+    feedback: str  # The Critic's complaints
+    loop_count: int  # Safety counter
 
 
 # --- Node 1: The Adaptive Planner ---
 def planner_node(state: AgentState):
     print("--- 🧠 PLANNER: Generating Strategy ---")
-    llm = ChatOllama(model=MODEL_NAME, temperature=0)
 
     # Check if this is a retry
     feedback = state.get("feedback", "")
     original_question = state["question"]
+
     if feedback == "Ambiguous review output. Please generate a new plan.":
-        # If the Reviewer glitched, we don't blame the plan.
-        # We just tell the Planner to try a slightly different angle.
         print("   (System Warning: Reviewer failed to parse. Asking Planner to retry.)")
         template = """You are a Planner Agent.
-            The previous attempt was technically successful, but the Reviewer failed to parse it.
+        The previous attempt was technically successful, but the Reviewer failed to parse it.
 
-            Original Question: {question}
+        Original Question: {question}
 
-            Action: Create a ROBUST plan that is slightly different from the last one to ensure clear results.
-            Plan:"""
+        Action: Create a ROBUST plan that is slightly different from the last one to ensure clear results.
+        Plan:"""
     elif feedback:
         print(f"   (Refining plan based on feedback: {feedback})")
         template = """You are a Planner Agent.
@@ -71,19 +91,22 @@ def planner_node(state: AgentState):
     return {"plan": plan}
 
 
-# --- Node 2: The Performer (Same as before) ---
+# --- Node 2: The Performer (Enhanced RAG) ---
 def performer_node(state: AgentState):
     print("--- 🏃 PERFORMER: Executing RAG ---")
-    embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-    vectorstore = Chroma(persist_directory=DB_PATH, embedding_function=embedding_model)
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-    llm = ChatOllama(model=MODEL_NAME, temperature=0)
 
-    # Retrieve
+    # 1. Retrieve Context using Metadata Filtering and global vectorstore
+    retriever = vectorstore.as_retriever(
+        search_kwargs={
+            "k": K,
+            "filter": {"question_id": state["question_id"]}
+        }
+    )
+
     docs = retriever.invoke(state["question"])
     context_text = "\n\n".join(doc.page_content for doc in docs)
 
-    # Generate
+    # 2. Generate Answer
     template = """You are an Expert Performer. 
     Execute the plan to answer the question using the context.
 
@@ -95,24 +118,28 @@ def performer_node(state: AgentState):
 
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | llm | StrOutputParser()
-    answer = chain.invoke({"plan": state["plan"], "context": context_text, "question": state["question"]})
+
+    answer = chain.invoke({
+        "plan": state.get("plan", ""),
+        "context": context_text,
+        "question": state["question"]
+    })
 
     # Increment loop count here
     current_loop = state.get("loop_count", 0)
     return {"answer": answer, "context": context_text, "loop_count": current_loop + 1}
 
 
-# --- Node 3: The Reviewer (NEW) ---
+# --- Node 3: The Reviewer ---
 def reviewer_node(state: AgentState):
     print("--- 🔎 REVIEWER: Grading Answer ---")
-    llm = ChatOllama(model=MODEL_NAME, temperature=0)
 
     template = """You are a Critical Reviewer.
     Analyze the following Question and Answer.
     Check for:
     1. Hallucinations (facts not in context).
     2. Missing information (did not answer the full question).
-    
+
     - If the answer is correct, output exactly "STATUS: PASS".
     - If the answer is incorrect or incomplete, start your response with "STATUS: FAIL". Then, provide your reasoning.
 
@@ -124,6 +151,7 @@ def reviewer_node(state: AgentState):
 
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | llm | StrOutputParser()
+
     review = chain.invoke({
         "question": state["question"],
         "context": state["context"],
@@ -138,12 +166,10 @@ def reviewer_node(state: AgentState):
 
     elif clean_review.startswith("STATUS: FAIL"):
         print(f"   ❌ Review: FAILED")
-        # We remove the "STATUS: FAIL" tag so the planner just sees the reason
         reason = review.replace("STATUS: FAIL", "").strip()
         return {"feedback": reason}
 
     else:
-        # Fallback: If the LLM didn't follow instructions (rare with Llama 3), fail safely.
         print(f"   ⚠️ Ambiguous Review. Defaulting to FAIL. (Output: {review[:50]}...)")
         return {"feedback": "Ambiguous review output. Please generate a new plan."}
 
@@ -153,16 +179,13 @@ def should_continue(state: AgentState):
     feedback = state.get("feedback")
     loop_count = state.get("loop_count", 0)
 
-    # Condition 1: If approved (no feedback), Stop.
     if not feedback:
         return "end"
 
-    # Condition 2: If we tried too many times, Stop (give up).
     if loop_count >= MAX_RETRIES:
         print("--- 🛑 Max retries reached. Stopping. ---")
         return "end"
 
-    # Condition 3: Otherwise, Loop back to Planner.
     return "retry"
 
 
@@ -170,21 +193,18 @@ def should_continue(state: AgentState):
 def build_correction_agent():
     workflow = StateGraph(AgentState)
 
-    # Add Nodes
     workflow.add_node("planner", planner_node)
     workflow.add_node("performer", performer_node)
     workflow.add_node("reviewer", reviewer_node)
 
-    # Add Edges
     workflow.add_edge(START, "planner")
     workflow.add_edge("planner", "performer")
     workflow.add_edge("performer", "reviewer")
 
-    # Add Conditional Edge
     workflow.add_conditional_edges(
-        "reviewer",  # Start at Reviewer
-        should_continue,  # Run this function to decide where to go
-        {  # Map the function's output to Nodes
+        "reviewer",
+        should_continue,
+        {
             "end": END,
             "retry": "planner"
         }
@@ -193,18 +213,33 @@ def build_correction_agent():
     return workflow.compile()
 
 
-# --- Execution ---
-if __name__ == "__main__":
-    agent = build_correction_agent()
-    question = "Why do agentic workflows introduce latency?"
+correction_agent = build_correction_agent()
 
-    print(f"Processing: {question}")
+
+# --- Execution Wrapper ---
+def run_correction_agent(question: str, question_id: str):
+    """
+    Executes the self-correction agent workflow and records latency.
+    """
+    print(f"\n--- Processing Question: {question} ---")
     start_time = time.time()
 
-    # Initialize state with loop_count = 0
-    result = agent.invoke({"question": question, "loop_count": 0})
+    # Run the Graph
+    result = correction_agent.invoke({
+        "question": question,
+        "question_id": question_id,
+        "loop_count": 0
+    })
 
     end_time = time.time()
+    total_latency = end_time - start_time
+
     print(f"\nFinal Answer: {result['answer']}")
-    print(f"⏱️ Total Latency: {end_time - start_time:.2f} seconds")
-    print(f"🔄 Total Loops: {result['loop_count']}")
+    print(f"⏱️ Total Latency: {total_latency:.2f} seconds")
+    print(f"🔄 Total Loops: {result.get('loop_count', 1)}")
+
+    return result['answer'], total_latency, result.get('loop_count', 1)
+
+
+if __name__ == "__main__":
+    run_correction_agent("Were Scott Derrickson and Ed Wood of the same nationality?", "5a8b57f25542995d1e6f1371")
