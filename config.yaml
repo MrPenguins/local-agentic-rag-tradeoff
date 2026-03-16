@@ -5,6 +5,6 @@ database:
 models:
   llm_name: "llama3.1"
   llm_temperature: 0
-  embedding_name: "BAAI/bge-m3"
+  embedding_name: "BAAI/bge-base-en-v1.5"
   device: "cuda"
   max_retries: 3

@@ -10,7 +10,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 
 # --- Configuration ---
-with open("config.yaml", "r") as f:
+with open("../config.yaml", "r") as f:
     config = yaml.safe_load(f)
 
 DB_PATH = config['database']['path']
