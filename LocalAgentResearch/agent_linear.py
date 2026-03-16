@@ -49,6 +49,8 @@ class AgentState(TypedDict):
     context: str
     answer: str
     retrieved_titles: list
+    start_time: float
+    ttft: float
 
 
 # --- Node 1: The Planner (Query Generator) ---
@@ -139,12 +141,27 @@ def performer_node(state: AgentState):
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | llm | StrOutputParser()
 
-    answer = chain.invoke({
+    print("Thinking...")
+
+    # --- TTFT Streaming Logic ---
+    answer = ""
+    ttft = None
+
+    for chunk in chain.stream({
         "context": context_text,
         "question": state["question"]
-    })
+    }):
+        if ttft is None:
+            # Calculate TTFT based on the global start time passed in the state
+            ttft = time.time() - state["start_time"]
+        answer += chunk
 
-    return {"answer": answer, "context": context_text, "retrieved_titles": titles}
+    return {
+        "answer": answer,
+        "context": context_text,
+        "retrieved_titles": titles,
+        "ttft": ttft
+    }
 
 
 # --- Build the Graph ---
@@ -175,19 +192,21 @@ def run_linear_agent(question: str, question_id: str):
 
     result = linear_agent.invoke({
         "question": question,
-        "question_id": question_id
+        "question_id": question_id,
+        "start_time": start_time
     })
 
     end_time = time.time()
     latency = end_time - start_time
 
     titles_used = result.get('retrieved_titles', [])
+    ttft = result.get('ttft', 0.0)
 
     print(f"Answer: {result['answer']}")
     print(f"📚 Sources Used: {titles_used}")
-    print(f"⏱️ Total Latency: {latency:.2f} seconds")
+    print(f"⏱️ TTFT: {ttft:.2f} seconds | Total Latency: {latency:.2f} seconds")
 
-    return result['answer'], latency, titles_used
+    return result['answer'], latency, titles_used, ttft
 
 
 if __name__ == "__main__":

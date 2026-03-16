@@ -67,19 +67,29 @@ def run_standard_rag(question, question_id):
     chain = prompt | llm | StrOutputParser()
 
     print("Thinking...")
-    answer = chain.invoke({
+
+    # --- TTFT Streaming Logic ---
+    answer = ""
+    ttft = None
+
+    # Stream the output chunk by chunk
+    for chunk in chain.stream({
         "context": context_text,
         "question": question
-    })
+    }):
+        if ttft is None:
+            # Capture the exact moment the first token arrives
+            ttft = time.time() - start_time
+        answer += chunk
 
     end_time = time.time()
-    latency = end_time - start_time
+    total_latency = end_time - start_time
 
     print(f"Answer: {answer}")
     print(f"📚 Sources Used: {titles_used}")
-    print(f"⏱️ Total Latency: {latency:.2f} seconds")
+    print(f"⏱️ TTFT: {ttft:.2f} seconds | Total Latency: {total_latency:.2f} seconds")
 
-    return answer, latency, titles_used
+    return answer, total_latency, titles_used, ttft
 
 
 if __name__ == "__main__":

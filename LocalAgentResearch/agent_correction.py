@@ -52,6 +52,8 @@ class AgentState(TypedDict):
     feedback: str
     loop_count: int
     retrieved_titles: list
+    start_time: float
+    ttft: float
 
 
 # --- Node 1: The Adaptive Planner (Query Generator) ---
@@ -165,7 +167,7 @@ def performer_node(state: AgentState):
     titles = [doc.metadata.get("title", "Unknown Title") for doc in unique_docs]
     print(f"   (Retrieved Unique Sources: {titles})")
 
-    # Strict Synthesis Prompt (No "performing" actions)
+    # Strict Synthesis Prompt
     template = """You are a strict Information Synthesizer.
     Answer the question based ONLY on the following context:
     
@@ -179,17 +181,28 @@ def performer_node(state: AgentState):
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | llm | StrOutputParser()
 
-    answer = chain.invoke({
+    print("Thinking...")
+
+    # --- TTFT Streaming Logic ---
+    answer = ""
+    ttft = None
+
+    for chunk in chain.stream({
         "context": context_text,
         "question": state["question"]
-    })
+    }):
+        if ttft is None:
+            # Overwrites on every loop, ensuring TTFT reflects the final answer's start time
+            ttft = time.time() - state["start_time"]
+        answer += chunk
 
     current_loop = state.get("loop_count", 0)
     return {
         "answer": answer,
         "context": context_text,
         "loop_count": current_loop + 1,
-        "retrieved_titles": titles
+        "retrieved_titles": titles,
+        "ttft": ttft
     }
 
 
@@ -285,19 +298,21 @@ def run_correction_agent(question: str, question_id: str):
     result = correction_agent.invoke({
         "question": question,
         "question_id": question_id,
-        "loop_count": 0
+        "loop_count": 0,
+        "start_time": start_time
     })
 
     end_time = time.time()
     total_latency = end_time - start_time
     titles_used = result.get('retrieved_titles', [])
+    ttft = result.get('ttft', 0.0)
 
     print(f"\nFinal Answer: {result['answer']}")
     print(f"📚 Sources Used: {titles_used}")
-    print(f"⏱️ Total Latency: {total_latency:.2f} seconds")
+    print(f"⏱️ TTFT: {ttft:.2f} seconds | Total Latency: {total_latency:.2f} seconds")
     print(f"🔄 Total Loops: {result.get('loop_count', 1)}")
 
-    return result['answer'], total_latency, titles_used, result.get('loop_count', 1)
+    return result['answer'], total_latency, titles_used, result.get('loop_count', 1), ttft
 
 
 if __name__ == "__main__":
