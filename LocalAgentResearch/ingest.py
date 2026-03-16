@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import stat
+import yaml
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -9,8 +10,15 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 
 # --- Configuration ---
+with open("config.yaml", "r") as f:
+    config = yaml.safe_load(f)
+
+DB_PATH = config['database']['path']
+EMBEDDING_NAME = config['models']['embedding_name']
+DEVICE = config['models']['device']
+
+# Ingestion-specific paths
 DATA_PATH = "./data"
-DB_PATH = "./vectorstore"
 DATASET_PATH = "./dataset/hotpot_dev_distractor_v1.json"
 GOLDEN_DATASET_PATH = "./dataset/clean_benchmark.json"
 
@@ -28,7 +36,7 @@ def create_vector_db():
         print(f"Created {DATA_PATH}. Please put .txt files there.")
         return
 
-    # 2. Clear old database (optional, good for fresh experiments)
+    # 2. Clear old database
     if os.path.exists(DB_PATH):
         shutil.rmtree(DB_PATH, onexc=remove_readonly)
 
@@ -42,7 +50,6 @@ def create_vector_db():
     print(f"Loaded {len(documents)} document(s).")
 
     # 4. Split Text (Chunking)
-    # Critical for RAG: We break text into smaller pieces so the LLM isn't overwhelmed.
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=500,  # How many characters per chunk
         chunk_overlap=50  # Overlap to preserve context between chunks
@@ -51,11 +58,12 @@ def create_vector_db():
     print(f"Split into {len(chunks)} chunks.")
 
     # 5. Create Embeddings & Store in Chroma
-    # We use a standard, lightweight embedding model suitable for laptops.
     print("Creating embeddings (this may take a moment)...")
-    embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    embedding_model = HuggingFaceEmbeddings(
+        model_name=EMBEDDING_NAME,
+        model_kwargs={'device': DEVICE}
+    )
 
-    # This line does the heavy lifting: Embeds -> Stores -> Persists
     Chroma.from_documents(
         documents=chunks,
         embedding=embedding_model,
@@ -106,9 +114,12 @@ def create_vector_db_from_dataset():
 
     # Vectorize and Store
     print("Embedding and storing in ChromaDB...")
-    embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2",
-                                            model_kwargs={'device': 'cuda'},
-                                            show_progress=True)
+    embedding_model = HuggingFaceEmbeddings(
+        model_name=EMBEDDING_NAME,
+        model_kwargs={'device': DEVICE},
+        show_progress=True
+    )
+
     Chroma.from_documents(
         documents=documents,
         embedding=embedding_model,
