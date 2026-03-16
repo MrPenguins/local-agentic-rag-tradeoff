@@ -34,7 +34,12 @@ llm = ChatOllama(model=MODEL_NAME, temperature=LLM_TEMPERATURE)
 # WARM UP THE LLM
 print("Sending warm-up ping to Ollama...")
 llm.invoke("Hi")
-print("GPU is warm. Ready to benchmark.")
+
+# WARM UP THE EMBEDDING MODEL
+print("Sending warm-up ping to Embedding Model...")
+embedding_model.embed_query("Warm up the GPU memory pool.")
+
+print("GPU is fully warm. Ready to benchmark.")
 
 
 # --- 1. Define the State ---
