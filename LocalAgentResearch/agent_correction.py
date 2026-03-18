@@ -185,13 +185,13 @@ def performer_node(state: AgentState):
 
     # --- TTFT Streaming Logic ---
     answer = ""
-    ttft = None
+    ttft = 0.0
 
     for chunk in chain.stream({
         "context": context_text,
         "question": state["question"]
     }):
-        if ttft is None:
+        if ttft == 0.0:
             # Overwrites on every loop, ensuring TTFT reflects the final answer's start time
             ttft = time.time() - state["start_time"]
         answer += chunk

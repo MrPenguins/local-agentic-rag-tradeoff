@@ -70,14 +70,14 @@ def run_standard_rag(question, question_id):
 
     # --- TTFT Streaming Logic ---
     answer = ""
-    ttft = None
+    ttft = 0.0
 
     # Stream the output chunk by chunk
     for chunk in chain.stream({
         "context": context_text,
         "question": question
     }):
-        if ttft is None:
+        if ttft == 0.0:
             # Capture the exact moment the first token arrives
             ttft = time.time() - start_time
         answer += chunk
