@@ -135,33 +135,34 @@ def planner_node(state: AgentState):
 def performer_node(state: AgentState):
     print("--- 🏃 PERFORMER: Executing Multi-Query RAG ---")
 
-    queries = state["search_queries"]
+    # 1. Iterative Retrieval with Scores
+    all_scored_docs = []
+    for query in state["search_queries"]:
+        # Returns a list of tuples: (Document, distance_score)
+        docs_with_scores = vectorstore.similarity_search_with_score(
+            query,
+            k=K,
+            filter={"question_id": state["question_id"]}
+        )
+        all_scored_docs.extend(docs_with_scores)
 
-    # Dynamic K calculation
-    k_per_query = max(1, K // len(queries))
-    print(f"   (Budget constraint: {K} total docs -> {k_per_query} docs per query)")
+    # 2. Deduplication & Score Optimization
+    unique_docs_map = {}
+    for doc, score in all_scored_docs:
+        content = doc.page_content
+        # If document is new, OR if we found it again with a BETTER (lower) distance score
+        if content not in unique_docs_map or score < unique_docs_map[content][1]:
+            unique_docs_map[content] = (doc, score)
 
-    retriever = vectorstore.as_retriever(
-        search_kwargs={
-            "k": k_per_query,
-            "filter": {"question_id": state["question_id"]}
-        }
-    )
+    # 3. Global Ranking
+    # Sort the dictionary values by the score (index 1), ascending
+    ranked_scored_docs = sorted(unique_docs_map.values(), key=lambda x: x[1])
 
-    all_docs = []
-    for query in queries:
-        docs = retriever.invoke(query)
-        all_docs.extend(docs)
+    # 4. Enforce Budget constraint
+    top_k_scored = ranked_scored_docs[:K]
 
-    # Deduplication
-    unique_docs = []
-    seen_content = set()
-    for doc in all_docs:
-        if doc.page_content not in seen_content:
-            seen_content.add(doc.page_content)
-            unique_docs.append(doc)
-
-    unique_docs = unique_docs[:K]
+    # 5. Extract final documents for generation
+    unique_docs = [doc for doc, score in top_k_scored]
 
     context_text = "\n\n".join(doc.page_content for doc in unique_docs)
     titles = [doc.metadata.get("title", "Unknown Title") for doc in unique_docs]
