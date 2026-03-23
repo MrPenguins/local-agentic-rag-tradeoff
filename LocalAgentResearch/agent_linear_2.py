@@ -1,0 +1,214 @@
+import time
+from typing import TypedDict
+import yaml
+from langgraph.graph import StateGraph, START, END
+
+from langchain_ollama import ChatOllama
+from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+# --- Configuration ---
+with open("../config.yaml", "r") as f:
+    config = yaml.safe_load(f)
+
+DB_PATH = config['database']['path']
+K = config['database']['k_retrieval']
+MODEL_NAME = config['models']['llm_name']
+EMBEDDING_NAME = config['models']['embedding_name']
+DEVICE = config['models']['device']
+LLM_TEMPERATURE = config['models']['llm_temperature']
+
+# --- Global Initialization ---
+print("Initializing models and warming up GPU...")
+embedding_model = HuggingFaceEmbeddings(
+    model_name=EMBEDDING_NAME,
+    model_kwargs={'device': DEVICE}
+)
+vectorstore = Chroma(persist_directory=DB_PATH, embedding_function=embedding_model)
+
+llm = ChatOllama(model=MODEL_NAME, temperature=LLM_TEMPERATURE)
+
+# WARM UP THE LLM
+print("Sending warm-up ping to Ollama...")
+llm.invoke("Hi")
+
+# WARM UP THE EMBEDDING MODEL
+print("Sending warm-up ping to Embedding Model...")
+embedding_model.embed_query("Warm up the GPU memory pool.")
+
+print("GPU is fully warm. Ready to benchmark.")
+
+
+# --- 1. Define the State ---
+class AgentState(TypedDict):
+    question: str
+    question_id: str
+    raw_docs: list  # Stores the 2*K raw documents and scores
+    filtered_docs: list  # Stores the final K documents
+    context: str
+    answer: str
+    retrieved_titles: list
+    start_time: float
+    ttft: float
+
+
+# --- Node 1: The Deep Retriever ---
+def retriever_node(state: AgentState):
+    print("\n--- 🔎 RETRIEVER: Fetching Deep Pool ---")
+    fetch_k = K * 2
+    print(f"   (Fetching top {fetch_k} documents for evaluation)")
+
+    docs_with_scores = vectorstore.similarity_search_with_score(
+        state["question"],
+        k=fetch_k,
+        filter={"question_id": state["question_id"]}
+    )
+
+    return {"raw_docs": docs_with_scores}
+
+
+# --- Node 2: The LLM Filter (Pointwise Evaluator) ---
+def filter_node(state: AgentState):
+    print("--- ⚖️ FILTER: Evaluating Document Relevance ---")
+
+    template = """You are a strict relevance grader. 
+    Does the following document contain information that is relevant to answering the question?
+
+    Document: {document}
+    Question: {question}
+
+    Output strictly "YES" or "NO". Do not output any other text."""
+
+    prompt = ChatPromptTemplate.from_template(template)
+    chain = prompt | llm | StrOutputParser()
+
+    relevant_docs = []
+    irrelevant_docs = []
+
+    # Evaluate each document individually
+    for doc, score in state["raw_docs"]:
+        result = chain.invoke({
+            "document": doc.page_content,
+            "question": state["question"]
+        }).strip().upper()
+
+        if "YES" in result:
+            relevant_docs.append((doc, score))
+        else:
+            irrelevant_docs.append((doc, score))
+
+    print(f"   (LLM Graded: {len(relevant_docs)} Relevant, {len(irrelevant_docs)} Irrelevant)")
+
+    # Sort both lists by distance score (ascending, lower is better)
+    relevant_docs.sort(key=lambda x: x[1])
+    irrelevant_docs.sort(key=lambda x: x[1])
+
+    # 1. Take top K from relevant
+    final_docs = relevant_docs[:K]
+
+    # 2. Enforce Fallback Padding (if LLM found fewer than K relevant docs)
+    if len(final_docs) < K:
+        shortfall = K - len(final_docs)
+        padding = irrelevant_docs[:shortfall]
+        final_docs.extend(padding)
+        print(f"   (Padded context with {len(padding)} highest-similarity fallback docs)")
+
+    # Extract final objects and metadata
+    unique_docs = [doc for doc, score in final_docs]
+    context_text = "\n\n".join(doc.page_content for doc in unique_docs)
+    titles = [doc.metadata.get("title", "Unknown Title") for doc in unique_docs]
+
+    print(f"   (Final Context Sources: {titles})")
+
+    return {
+        "filtered_docs": unique_docs,
+        "context": context_text,
+        "retrieved_titles": titles
+    }
+
+
+# --- Node 3: The Generator ---
+def generator_node(state: AgentState):
+    print("--- 🏃 GENERATOR: Synthesizing Answer ---")
+
+    template = """You are a strict Information Synthesizer.
+    Answer the question based ONLY on the following context:
+
+    Context:
+    {context}
+
+    Question: {question}
+
+    Answer:"""
+
+    prompt = ChatPromptTemplate.from_template(template)
+    chain = prompt | llm | StrOutputParser()
+
+    print("Thinking...")
+
+    # --- TTFT Streaming Logic ---
+    answer = ""
+    ttft = 0.0
+
+    for chunk in chain.stream({
+        "context": state["context"],
+        "question": state["question"]
+    }):
+        if ttft == 0.0:
+            ttft = time.time() - state["start_time"]
+        answer += chunk
+
+    return {
+        "answer": answer,
+        "ttft": ttft
+    }
+
+
+# --- Build the Graph ---
+def build_linear_agent():
+    workflow = StateGraph(AgentState)
+
+    workflow.add_node("retriever", retriever_node)
+    workflow.add_node("filter", filter_node)
+    workflow.add_node("generator", generator_node)
+
+    workflow.add_edge(START, "retriever")
+    workflow.add_edge("retriever", "filter")
+    workflow.add_edge("filter", "generator")
+    workflow.add_edge("generator", END)
+
+    return workflow.compile()
+
+
+linear_agent = build_linear_agent()
+
+
+# --- Execution Wrapper ---
+def run_linear_agent(question: str, question_id: str):
+    print(f"\n--- Processing Question: {question} ---")
+
+    start_time = time.time()
+
+    result = linear_agent.invoke({
+        "question": question,
+        "question_id": question_id,
+        "start_time": start_time
+    })
+
+    end_time = time.time()
+    latency = end_time - start_time
+
+    titles_used = result.get('retrieved_titles', [])
+    ttft = result.get('ttft', 0.0)
+
+    print(f"Answer: {result['answer']}")
+    print(f"📚 Sources Used: {titles_used}")
+    print(f"⏱️ TTFT: {ttft:.2f} seconds | Total Latency: {latency:.2f} seconds")
+
+    return result['answer'], latency, titles_used, ttft
+
+
+if __name__ == "__main__":
+    run_linear_agent("Were Scott Derrickson and Ed Wood of the same nationality?", "5a8b57f25542995d1e6f1371")
