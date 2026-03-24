@@ -69,17 +69,20 @@ def retriever_node(state: AgentState):
     return {"raw_docs": docs_with_scores}
 
 
-# --- Node 2: The LLM Filter (Pointwise Evaluator) ---
+# --- Node 2: The LLM Filter (Pointwise Evaluator with CoT) ---
 def filter_node(state: AgentState):
-    print("--- ⚖️ FILTER: Evaluating Document Relevance ---")
+    print("--- ⚖️ FILTER: Evaluating Document Relevance (CoT) ---")
 
     template = """You are a strict relevance grader. 
-    Does the following document contain information that is relevant to answering the question?
+    Analyze the Document against the Question.
+    A document is relevant if it contains the final answer OR if it contains essential "bridge" entities (like a specific name, movie, or location) required to research the final answer.
 
     Document: {document}
     Question: {question}
 
-    Output strictly "YES" or "NO". Do not output any other text."""
+    Output your response in exactly two lines:
+    Rationale: [1 short sentence explaining if it contains the answer or a bridge entity]
+    Decision: [YES or NO]"""
 
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | llm | StrOutputParser()
@@ -92,9 +95,10 @@ def filter_node(state: AgentState):
         result = chain.invoke({
             "document": doc.page_content,
             "question": state["question"]
-        }).strip().upper()
+        })
 
-        if "YES" in result:
+        # Stricter parsing to extract the CoT decision safely
+        if "DECISION: YES" in result.upper() or "\nYES" in result.upper()[-5:]:
             relevant_docs.append((doc, score))
         else:
             irrelevant_docs.append((doc, score))

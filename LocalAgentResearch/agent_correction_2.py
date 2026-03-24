@@ -115,28 +115,36 @@ def retriever_node(state: AgentState):
 
 # --- Node 3: The Stateful Filter ---
 def filter_node(state: AgentState):
-    print("--- ⚖️ FILTER: Executing Stateful Evaluation ---")
+    print("--- ⚖️ FILTER: Executing Stateful Evaluation (CoT) ---")
 
     loop = state.get('loop_count', 0)
     evaluator_chain = llm | StrOutputParser()
 
     final_docs = []
 
-    # LOOP 0: Standard Blind Fetch
+    # LOOP 0: Standard Blind Fetch with Bridge Prompting
     if loop == 0:
-        print("   (Loop 0: Executing standard relevance check)")
+        print("   (Loop 0: Executing CoT relevance check with Bridge logic)")
         template = """You are a strict relevance grader. 
-        Does this document contain information relevant to answering the question?
+        Analyze the Document against the Question.
+        A document is relevant if it contains the final answer OR if it contains essential "bridge" entities (like a specific name, movie, or location) required to research the final answer.
+
         Document: {document}
         Question: {question}
-        Output strictly "YES" or "NO"."""
+
+        Output your response in exactly two lines:
+        Rationale: [1 short sentence explaining if it contains the answer or a bridge entity]
+        Decision: [YES or NO]"""
+
         prompt = ChatPromptTemplate.from_template(template)
 
         relevant = []
         irrelevant = []
         for doc in state["raw_docs"]:
             res = evaluator_chain.invoke(prompt.format(document=doc.page_content, question=state["question"]))
-            if "YES" in res.upper():
+
+            # Stricter parsing to avoid false positives in the rationale
+            if "DECISION: YES" in res.upper() or "\nYES" in res.upper()[-5:]:
                 relevant.append(doc)
             else:
                 irrelevant.append(doc)
@@ -155,16 +163,21 @@ def filter_node(state: AgentState):
 
         # Step A: Force-Purge (Retention)
         retained = []
-        retention_prompt = ChatPromptTemplate.from_template("""Does this document provide factual background context that is true and helpful, even if it does not contain the missing information?
+        retention_prompt = ChatPromptTemplate.from_template("""Does this document provide factual background context that is true and helpful, even if it does not contain the exact missing information? 
+        Look for "bridge" entities that connect to the missing information.
+
         Missing Information: {feedback}
         Document: {document}
-        Output strictly "YES" or "NO".""")
+
+        Output your response in exactly two lines:
+        Rationale: [1 short sentence explaining your reasoning]
+        Decision: [YES or NO]""")
 
         for doc in state.get("filtered_docs", []):
             if len(retained) >= K - 1:  # Force at least 1 slot open
                 break
             res = evaluator_chain.invoke(retention_prompt.format(feedback=feedback, document=doc.page_content))
-            if "YES" in res.upper():
+            if "DECISION: YES" in res.upper() or "\nYES" in res.upper()[-5:]:
                 retained.append(doc)
 
         print(f"   (Retained {len(retained)} background documents from previous loop)")
@@ -174,14 +187,18 @@ def filter_node(state: AgentState):
         acquired = []
         irrelevant = []
 
-        acquisition_prompt = ChatPromptTemplate.from_template("""Does this document contain the specific MISSING information identified below?
+        acquisition_prompt = ChatPromptTemplate.from_template("""Analyze if this document contains the specific MISSING information identified below.
+
         Missing Information: {feedback}
         Document: {document}
-        Output strictly "YES" or "NO".""")
+
+        Output your response in exactly two lines:
+        Rationale: [1 short sentence explaining if the exact missing fact is present]
+        Decision: [YES or NO]""")
 
         for doc in state["raw_docs"]:
             res = evaluator_chain.invoke(acquisition_prompt.format(feedback=feedback, document=doc.page_content))
-            if "YES" in res.upper():
+            if "DECISION: YES" in res.upper() or "\nYES" in res.upper()[-5:]:
                 acquired.append(doc)
             else:
                 irrelevant.append(doc)
