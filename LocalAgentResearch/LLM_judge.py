@@ -1,12 +1,16 @@
 import csv
 import os
+import sys
+import threading
+import concurrent.futures
 from pydantic import BaseModel, Field
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
+csv.field_size_limit(sys.maxsize)
+
 
 # --- 1. Define Strict Output Schema ---
-# This forces the API to return a predictable JSON object instead of raw text.
 class Grade(BaseModel):
     score: int = Field(description="Strictly 1 if correct, 0 if incorrect.")
     reasoning: str = Field(description="A concise 1-sentence explanation for the score.")
@@ -29,13 +33,13 @@ def grade_answer(chain, question: str, gold_answer: str, generated_answer: str):
         return Grade(score=0, reasoning="API Call Failed.")
 
 
-def run_llm_judge(input_csv: str, output_csv: str, api_key: str):
+def run_llm_judge(input_csv: str, output_csv: str, api_key: str, max_workers: int = 5):
     print(f"Loading raw benchmark results from: {input_csv}")
 
     # --- 2. Initialize the Judge ---
     # Temperature MUST be 0 for deterministic grading.
     judge_llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",  # Highly recommended for fast, cheap, structured classification
+        model="gemini-2.5-flash",
         temperature=0,
         google_api_key=api_key
     )
@@ -80,46 +84,58 @@ def run_llm_judge(input_csv: str, output_csv: str, api_key: str):
         "correction_llm_score", "correction_llm_reasoning"
     ]
 
-    # --- 5. The Execution Loop ---
-    with open(output_csv, 'a', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=headers)
-        if not file_exists:
+    # --- 5. Threading Setup ---
+    # Create a lock to prevent concurrent writing to the CSV
+    csv_lock = threading.Lock()
+
+    # Filter out rows that are already processed
+    rows_to_process = [row for row in all_rows if row['question_id'] not in processed_ids]
+    total_to_process = len(rows_to_process)
+
+    print(f"Starting multi-threaded evaluation with {max_workers} workers for {total_to_process} questions...\n")
+
+    # Define the worker function that processes a single row
+    def process_row(row):
+        q_id = row['question_id']
+        question = row['question']
+        gold = row['gold_answer']
+
+        # I/O Bound API Calls (Executing concurrently across threads)
+        rag_grade = grade_answer(grading_chain, question, gold, row['rag_answer'])
+        lin_grade = grade_answer(grading_chain, question, gold, row['linear_answer'])
+        cor_grade = grade_answer(grading_chain, question, gold, row['correction_answer'])
+
+        # Update row dictionary
+        row['rag_llm_score'] = rag_grade.score
+        row['rag_llm_reasoning'] = rag_grade.reasoning
+        row['linear_llm_score'] = lin_grade.score
+        row['linear_llm_reasoning'] = lin_grade.reasoning
+        row['correction_llm_score'] = cor_grade.score
+        row['correction_llm_reasoning'] = cor_grade.reasoning
+
+        # Thread-safe disk writing
+        with csv_lock:
+            with open(output_csv, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=headers)
+                writer.writerow(row)
+            print(f"✅ [Saved] ID: {q_id} | Scores: RAG={rag_grade.score}, LIN={lin_grade.score}, COR={cor_grade.score}")
+
+    # --- 6. Execution ---
+    # Write headers if file is new
+    if not file_exists:
+        with open(output_csv, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
             writer.writeheader()
 
-        for i, row in enumerate(all_rows):
-            q_id = row['question_id']
-            if q_id in processed_ids:
-                continue
+    # Launch the ThreadPoolExecutor
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # submit maps the function to the filtered rows
+        futures = [executor.submit(process_row, row) for row in rows_to_process]
 
-            print(f"\nEvaluating {i + 1}/{len(all_rows)} | ID: {q_id}")
-            question = row['question']
-            gold = row['gold_answer']
+        # Wait for all to complete
+        concurrent.futures.wait(futures)
 
-            # Grade Baseline
-            print("   -> Grading RAG Baseline...")
-            rag_grade = grade_answer(grading_chain, question, gold, row['rag_answer'])
-
-            # Grade Linear
-            print("   -> Grading Linear Agent...")
-            lin_grade = grade_answer(grading_chain, question, gold, row['linear_answer'])
-
-            # Grade Correction
-            print("   -> Grading Correction Agent...")
-            cor_grade = grade_answer(grading_chain, question, gold, row['correction_answer'])
-
-            # Update row dictionary with new grading data
-            row['rag_llm_score'] = rag_grade.score
-            row['rag_llm_reasoning'] = rag_grade.reasoning
-            row['linear_llm_score'] = lin_grade.score
-            row['linear_llm_reasoning'] = lin_grade.reasoning
-            row['correction_llm_score'] = cor_grade.score
-            row['correction_llm_reasoning'] = cor_grade.reasoning
-
-            writer.writerow(row)
-            f.flush()
-            print(f"   [Saved] Scores: RAG={rag_grade.score}, LIN={lin_grade.score}, COR={cor_grade.score}")
-
-    print(f"\n🎉 LLM Evaluation complete. Results saved to {output_csv}")
+    print(f"\n🎉 Multi-threaded LLM Evaluation complete. Results saved to {output_csv}")
 
 
 if __name__ == "__main__":
@@ -128,4 +144,6 @@ if __name__ == "__main__":
     INPUT_CSV = "./output/raw_benchmark_results_500.csv"
     OUTPUT_CSV = "./output/llm_judged_results_500.csv"
 
-    run_llm_judge(INPUT_CSV, OUTPUT_CSV, API_KEY)
+    # Set max_workers based on your Google API Tier limits.
+    # 5 is generally safe for free/standard tiers.
+    run_llm_judge(INPUT_CSV, OUTPUT_CSV, API_KEY, max_workers=10)
