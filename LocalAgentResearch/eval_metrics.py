@@ -2,7 +2,10 @@ import csv
 import ast
 import re
 import string
+import sys
 from collections import Counter
+
+csv.field_size_limit(sys.maxsize)
 
 
 # --- NLP Normalization Functions ---
