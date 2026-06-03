@@ -212,4 +212,5 @@ vectorstore/
 data/
 dataset/
 chroma_db/
+BM25_CACHE/
 .idea/
