@@ -5,7 +5,6 @@ import requests
 DATASET_URL = "http://curtis.ml.cmu.edu/datasets/hotpot/hotpot_dev_distractor_v1.json"
 RAW_FILE = "./dataset/hotpot_dev_distractor_v1.json"
 OUTPUT_DIR = "./data"
-NUM_SAMPLES = 50
 
 
 def download_dataset():

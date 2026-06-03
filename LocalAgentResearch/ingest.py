@@ -21,6 +21,7 @@ DEVICE = config['models']['device']
 DATA_PATH = "./data"
 DATASET_PATH = "./dataset/hotpot_dev_distractor_v1.json"
 GOLDEN_DATASET_PATH = "./dataset/clean_benchmark.json"
+BM25_CACHE_PATH = "./BM25_CACHE/bm25_index.pkl"
 
 
 def remove_readonly(func, path, excinfo):
@@ -74,9 +75,11 @@ def create_vector_db():
 
 # This function would read the dataset, extract relevant text, and create the vector DB.
 def create_vector_db_from_dataset():
-    # Clear old database
+    # Clear old database and BM25 cache
     if os.path.exists(DB_PATH):
         shutil.rmtree(DB_PATH, onexc=remove_readonly)
+    if os.path.exists(BM25_CACHE_PATH):
+        os.remove(BM25_CACHE_PATH)
 
     with open(DATASET_PATH, 'r') as f:
         data = json.load(f)
