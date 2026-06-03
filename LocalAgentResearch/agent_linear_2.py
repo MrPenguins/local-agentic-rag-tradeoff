@@ -1,45 +1,11 @@
 import time
 from typing import TypedDict
-import yaml
 from langgraph.graph import StateGraph, START, END
 
-from langchain_ollama import ChatOllama
-from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from hybrid_retriever import hybrid_search_with_score
-
-# --- Configuration ---
-with open("../config.yaml", "r") as f:
-    config = yaml.safe_load(f)
-
-DB_PATH = config['database']['path']
-K = config['database']['k_retrieval']
-MODEL_NAME = config['models']['llm_name']
-EMBEDDING_NAME = config['models']['embedding_name']
-DEVICE = config['models']['device']
-LLM_TEMPERATURE = config['models']['llm_temperature']
-
-# --- Global Initialization ---
-print("Initializing models and warming up GPU...")
-embedding_model = HuggingFaceEmbeddings(
-    model_name=EMBEDDING_NAME,
-    model_kwargs={'device': DEVICE}
-)
-vectorstore = Chroma(persist_directory=DB_PATH, embedding_function=embedding_model)
-
-llm = ChatOllama(model=MODEL_NAME, temperature=LLM_TEMPERATURE)
-
-# WARM UP THE LLM
-print("Sending warm-up ping to Ollama...")
-llm.invoke("Hi")
-
-# WARM UP THE EMBEDDING MODEL
-print("Sending warm-up ping to Embedding Model...")
-embedding_model.embed_query("Warm up the GPU memory pool.")
-
-print("GPU is fully warm. Ready to benchmark.")
+from shared import llm, vectorstore, K
 
 
 # --- 1. Define the State ---
