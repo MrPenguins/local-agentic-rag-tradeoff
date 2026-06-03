@@ -15,7 +15,6 @@ BM25 index is cached to disk (pickle) to avoid rebuilding on every run.
 import hashlib
 import os
 import pickle
-import re
 import yaml
 from collections import defaultdict
 from rank_bm25 import BM25Okapi
