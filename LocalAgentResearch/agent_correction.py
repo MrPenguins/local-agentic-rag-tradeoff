@@ -8,6 +8,7 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from hybrid_retriever import hybrid_search_with_score
 
 # --- Configuration ---
 with open("../config.yaml", "r") as f:
@@ -139,10 +140,8 @@ def performer_node(state: AgentState):
     all_scored_docs = []
     for query in state["search_queries"]:
         # Returns a list of tuples: (Document, distance_score)
-        docs_with_scores = vectorstore.similarity_search_with_score(
-            query,
-            k=K,
-            filter={"question_id": state["question_id"]}
+        docs_with_scores = hybrid_search_with_score(
+            query, state["question_id"], vectorstore, k=K
         )
         all_scored_docs.extend(docs_with_scores)
 

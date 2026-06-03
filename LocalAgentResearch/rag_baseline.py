@@ -6,6 +6,7 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from hybrid_retriever import hybrid_search_with_score
 
 # --- Configuration ---
 with open("../config.yaml", "r") as f:
@@ -45,11 +46,8 @@ def run_standard_rag(question, question_id):
 
     start_time = time.time()
 
-    retriever = vectorstore.as_retriever(
-        search_kwargs={"k": K, "filter": {"question_id": question_id}}
-    )
-
-    docs = retriever.invoke(question)
+    scored = hybrid_search_with_score(question, question_id, vectorstore, k=K)
+    docs = [doc for doc, _ in scored]
 
     titles_used = [doc.metadata.get("title", "Unknown Title") for doc in docs]
     print(f"   (Retrieved Sources: {titles_used})")

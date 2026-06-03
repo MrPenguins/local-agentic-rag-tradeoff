@@ -8,6 +8,7 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from hybrid_retriever import hybrid_search_with_score
 
 # --- Configuration ---
 with open("../config.yaml", "r") as f:
@@ -60,10 +61,8 @@ def retriever_node(state: AgentState):
     fetch_k = K * 2
     print(f"   (Fetching top {fetch_k} documents for evaluation)")
 
-    docs_with_scores = vectorstore.similarity_search_with_score(
-        state["question"],
-        k=fetch_k,
-        filter={"question_id": state["question_id"]}
+    docs_with_scores = hybrid_search_with_score(
+        state["question"], state["question_id"], vectorstore, k=fetch_k
     )
 
     return {"raw_docs": docs_with_scores}

@@ -9,6 +9,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
+from hybrid_retriever import hybrid_search_with_score
 
 # --- Configuration ---
 with open("../config.yaml", "r") as f:
@@ -99,10 +100,8 @@ def retriever_node(state: AgentState):
     print(f"   (Fetching top {fetch_k} documents for current query)")
 
     # Returns [(Document, score), ...]
-    docs_with_scores = vectorstore.similarity_search_with_score(
-        state["current_query"],
-        k=fetch_k,
-        filter={"question_id": state["question_id"]}
+    docs_with_scores = hybrid_search_with_score(
+        state["current_query"], state["question_id"], vectorstore, k=fetch_k
     )
 
     # Embed score into metadata so it persists cleanly in the state list
