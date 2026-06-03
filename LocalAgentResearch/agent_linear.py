@@ -126,7 +126,8 @@ def performer_node(state: AgentState):
     print(f"   (Retrieved Unique Sources: {titles})")
 
     # 3. Generate Answer
-    template = """You are a strict Information Synthesizer.
+    template = """
+    You are a strict Information Synthesizer.
     Answer the question based ONLY on the following context:
 
     Context:

@@ -167,10 +167,10 @@ def performer_node(state: AgentState):
     titles = [doc.metadata.get("title", "Unknown Title") for doc in unique_docs]
     print(f"   (Retrieved Unique Sources: {titles})")
 
-    # Strict Synthesis Prompt
-    template = """You are a strict Information Synthesizer.
+    template = """
+    You are a strict Information Synthesizer.
     Answer the question based ONLY on the following context:
-    
+
     Context:
     {context}
 

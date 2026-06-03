@@ -233,11 +233,15 @@ def filter_node(state: AgentState):
 def generator_node(state: AgentState):
     print("--- 🏃 GENERATOR: Synthesizing Answer ---")
 
-    template = """You are a strict Information Synthesizer.
+    template = """
+    You are a strict Information Synthesizer.
     Answer the question based ONLY on the following context:
+
     Context:
     {context}
+
     Question: {question}
+
     Answer:"""
 
     prompt = ChatPromptTemplate.from_template(template)

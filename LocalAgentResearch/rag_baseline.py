@@ -56,10 +56,13 @@ def run_standard_rag(question, question_id):
     template = """
     You are a strict Information Synthesizer.
     Answer the question based ONLY on the following context:
+
+    Context:
     {context}
 
     Question: {question}
-    """
+
+    Answer:"""
     prompt = ChatPromptTemplate.from_template(template)
 
     chain = prompt | llm | StrOutputParser()
