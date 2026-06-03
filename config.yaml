@@ -1,6 +1,7 @@
 database:
   path: "./vectorstore"
   k_retrieval: 2
+  hybrid_alpha: 0.5   # 0.0 = pure BM25, 1.0 = pure semantic
 
 models:
   llm_name: "llama3.1"
