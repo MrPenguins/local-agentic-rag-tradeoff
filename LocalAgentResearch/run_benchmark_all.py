@@ -8,6 +8,8 @@ import json
 import csv
 import os
 
+from hybrid_retriever import hybrid_search_with_score
+from shared import vectorstore
 from rag_baseline import run_standard_rag
 from agent_linear import run_linear_agent as run_linear_v1
 from agent_correction import run_correction_agent as run_correction_v1
@@ -57,11 +59,10 @@ def run_benchmark(input_json: str, output_csv: str):
         if not file_exists:
             writer.writeheader()
 
-        # --- Silent warm-up (every launch: prime BM25, ChromaDB, GPU) ---
-        warmup = dataset[0]
-        print("Silent warm-up (priming BM25, ChromaDB, GPU)...")
+        # --- Silent warm-up (every launch: prime BM25, ChromaDB) ---
+        print("Silent warm-up (priming BM25, ChromaDB)...")
         try:
-            run_standard_rag(warmup["question"], warmup["_id"])
+            hybrid_search_with_score("warm up query", None, vectorstore, k=1)
         except Exception:
             pass
         print("Warm-up complete.\n")
@@ -76,10 +77,10 @@ def run_benchmark(input_json: str, output_csv: str):
             gold_answer = item["answer"]
             gold_titles = extract_gold_titles(item["supporting_facts"])
 
-            print(f"\n{'='*50}")
+            print(f"\n{'=' * 50}")
             print(f"Test {i + 1}/{len(dataset)} | ID: {q_id}")
             print(f"Question: {question}")
-            print(f"{'='*50}")
+            print(f"{'=' * 50}")
 
             # --- 1. Baseline RAG ---
             print("\n>>> [1/5] Baseline RAG...")
@@ -166,6 +167,6 @@ def run_benchmark(input_json: str, output_csv: str):
 
 if __name__ == "__main__":
     INPUT_FILE_PATH = "./dataset/benchmark_subset_500.json"
-    OUTPUT_FILE_PATH = "./output/raw_benchmark_results_500_all.csv"
+    OUTPUT_FILE_PATH = "./output/raw_benchmark_results_500_llama3.1.csv"
 
     run_benchmark(INPUT_FILE_PATH, OUTPUT_FILE_PATH)
