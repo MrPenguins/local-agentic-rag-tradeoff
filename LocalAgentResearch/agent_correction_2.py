@@ -1,4 +1,5 @@
 import time
+import re
 from typing import TypedDict, List, Tuple
 from langgraph.graph import StateGraph, START, END
 
@@ -86,7 +87,6 @@ def filter_node(state: AgentState):
     print("--- ⚖️ FILTER: Executing Stateful Evaluation (CoT) ---")
 
     loop = state.get('loop_count', 0)
-    evaluator_chain = llm | StrOutputParser()
 
     final_docs = []
 
@@ -105,11 +105,15 @@ def filter_node(state: AgentState):
         Decision: [YES or NO]"""
 
         prompt = ChatPromptTemplate.from_template(template)
+        chain = prompt | llm | StrOutputParser()
 
         relevant = []
         irrelevant = []
         for doc in state["raw_docs"]:
-            res = evaluator_chain.invoke(prompt.format(document=doc.page_content, question=state["question"]))
+            res = chain.invoke({
+                "document": doc.page_content,
+                "question": state["question"]
+            })
 
             # Stricter parsing to avoid false positives in the rationale
             if "DECISION: YES" in res.upper() or "\nYES" in res.upper()[-5:]:
@@ -140,11 +144,15 @@ def filter_node(state: AgentState):
         Output your response in exactly two lines:
         Rationale: [1 short sentence explaining your reasoning]
         Decision: [YES or NO]""")
+        retention_chain = retention_prompt | llm | StrOutputParser()
 
         for doc in state.get("filtered_docs", []):
             if len(retained) >= K - 1:  # Force at least 1 slot open
                 break
-            res = evaluator_chain.invoke(retention_prompt.format(feedback=feedback, document=doc.page_content))
+            res = retention_chain.invoke({
+                "feedback": feedback,
+                "document": doc.page_content
+            })
             if "DECISION: YES" in res.upper() or "\nYES" in res.upper()[-5:]:
                 retained.append(doc)
 
@@ -163,9 +171,13 @@ def filter_node(state: AgentState):
         Output your response in exactly two lines:
         Rationale: [1 short sentence explaining if the exact missing fact is present]
         Decision: [YES or NO]""")
+        acquisition_chain = acquisition_prompt | llm | StrOutputParser()
 
         for doc in state["raw_docs"]:
-            res = evaluator_chain.invoke(acquisition_prompt.format(feedback=feedback, document=doc.page_content))
+            res = acquisition_chain.invoke({
+                "feedback": feedback,
+                "document": doc.page_content
+            })
             if "DECISION: YES" in res.upper() or "\nYES" in res.upper()[-5:]:
                 acquired.append(doc)
             else:
@@ -267,7 +279,7 @@ def reviewer_node(state: AgentState):
         return {"feedback": None}
     elif clean_review.startswith("STATUS: FAIL"):
         print(f"   ❌ Review: FAILED")
-        reason = review.replace("STATUS: FAIL", "").strip()
+        reason = re.sub(r"(?i)^STATUS:\s*FAIL\s*", "", review.strip()).strip()
         return {"feedback": reason}
     else:
         print(f"   ⚠️ Ambiguous Review. Defaulting to FAIL.")

@@ -1,4 +1,5 @@
 import time
+import re
 from typing import TypedDict
 from langgraph.graph import StateGraph, START, END
 
@@ -86,7 +87,11 @@ def planner_node(state: AgentState):
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | llm | StrOutputParser()
 
-    raw_output = chain.invoke({"question": original_question, "feedback": feedback})
+    invoke_args = {"question": original_question}
+    if feedback and feedback != "Ambiguous review output. Please generate a new plan.":
+        invoke_args["feedback"] = feedback
+
+    raw_output = chain.invoke(invoke_args)
 
     # Parse the output safely
     queries = [q.strip() for q in raw_output.split("|") if q.strip()]
@@ -206,7 +211,7 @@ def reviewer_node(state: AgentState):
         return {"feedback": None}
     elif clean_review.startswith("STATUS: FAIL"):
         print(f"   ❌ Review: FAILED")
-        reason = review.replace("STATUS: FAIL", "").strip()
+        reason = re.sub(r"(?i)^STATUS:\s*FAIL\s*", "", review.strip()).strip()
         return {"feedback": reason}
     else:
         print(f"   ⚠️ Ambiguous Review. Defaulting to FAIL. (Output: {review[:50]}...)")
