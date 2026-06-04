@@ -6,7 +6,7 @@ import concurrent.futures
 from pydantic import BaseModel, Field
 from openai import OpenAI
 
-csv.field_size_limit(2**31 - 1)
+csv.field_size_limit(2 ** 31 - 1)
 
 
 # --- 1. Define Output Schema ---
@@ -16,11 +16,11 @@ class Grade(BaseModel):
 
 
 PIPELINES = [
-    ("rag",            "RAG Baseline"),
-    ("linear_v1",      "Linear V1 (Query Decomp)"),
-    ("correction_v1",  "Correction V1 (P→P→R)"),
-    ("linear_v2",      "Linear V2 (Deep Retriever)"),
-    ("correction_v2",  "Correction V2 (Stateful CRAG)"),
+    ("rag", "RAG Baseline"),
+    ("linear_v1", "Linear V1 (Query Decomp)"),
+    ("correction_v1", "Correction V1 (P→P→R)"),
+    ("linear_v2", "Linear V2 (Deep Retriever)"),
+    ("correction_v2", "Correction V2 (Stateful CRAG)"),
 ]
 
 JUDGE_SYSTEM_PROMPT = """\
@@ -36,11 +36,11 @@ Output ONLY a JSON object with these exact keys:
 
 
 def grade_answer(
-    client: OpenAI,
-    model: str,
-    question: str,
-    gold_answer: str,
-    generated_answer: str,
+        client: OpenAI,
+        model: str,
+        question: str,
+        gold_answer: str,
+        generated_answer: str,
 ) -> Grade:
     """Call DeepSeek API with JSON mode, parse response into a Grade object."""
     if generated_answer == "ERROR" or not generated_answer:
@@ -84,11 +84,11 @@ def grade_answer(
 
 
 def run_llm_judge(
-    input_csv: str,
-    output_csv: str,
-    api_key: str,
-    model: str = "deepseek-chat",
-    max_workers: int = 3,
+        input_csv: str,
+        output_csv: str,
+        api_key: str,
+        model: str = "deepseek-chat",
+        max_workers: int = 3,
 ):
     print(f"Loading raw benchmark results from: {input_csv}")
 
@@ -121,9 +121,9 @@ def run_llm_judge(
 
     # Build output headers: original columns + 5×2 judging columns
     headers = (
-        list(all_rows[0].keys())
-        + [f"{pkg}_llm_score" for pkg, _ in PIPELINES]
-        + [f"{pkg}_llm_reasoning" for pkg, _ in PIPELINES]
+            list(all_rows[0].keys())
+            + [f"{pkg}_llm_score" for pkg, _ in PIPELINES]
+            + [f"{pkg}_llm_reasoning" for pkg, _ in PIPELINES]
     )
 
     # --- 4. Threading Setup ---

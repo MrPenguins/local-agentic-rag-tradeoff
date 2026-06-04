@@ -4,7 +4,7 @@ import re
 import string
 from collections import Counter
 
-csv.field_size_limit(2**31 - 1)  # Safe max for C long on all platforms
+csv.field_size_limit(2 ** 31 - 1)  # Safe max for C long on all platforms
 
 
 # --- NLP Normalization Functions ---
