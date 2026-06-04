@@ -26,6 +26,7 @@ vectorstore = Chroma(
 llm = ChatOllama(
     model=_config["models"]["llm_name"],
     temperature=_config["models"]["llm_temperature"],
+    reasoning=False,  # Disable CoT for Qwen3.5; no-op for Llama
 )
 
 # --- Warm-up ---
